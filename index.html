@@ -160,9 +160,17 @@
     <!-- STEP 3: FILTER (INK SAVER) -->
     <div id="step-filter" class="step">
         <div class="workspace" id="filter-ws">
-            <canvas id="filter-canvas" class="preview-canvas bg-white"></canvas>
+            <div id="filter-container" style="position:relative; display:inline-block; user-select:none;">
+                <canvas id="filter-canvas" class="preview-canvas bg-white"></canvas>
+                <div id="filter-overlays" style="position:absolute; inset:0; touch-action:none; display:none; cursor:crosshair; width:100%; height:100%;"></div>
+            </div>
         </div>
-        <div class="bottom-bar" style="height: auto; padding: 15px; flex-wrap: wrap; justify-content: space-evenly;">
+        <div class="bottom-bar" style="height: auto; padding: 15px; flex-wrap: wrap; justify-content: space-evenly; gap: 6px;">
+            <div class="w-full flex justify-center gap-2 mb-2">
+                <button class="btn" style="height:auto; padding:6px 12px; font-size:13px;" onclick="autoDetectPhotos()"><i class="fas fa-magic"></i> Auto Photos</button>
+                <button class="btn" style="height:auto; padding:6px 12px; font-size:13px;" id="btn-draw-photo" onclick="togglePhotoDraw()"><i class="fas fa-vector-square"></i> Manual Protect</button>
+                <button class="btn" style="height:auto; padding:6px 12px; font-size:13px;" onclick="clearPhotoArea()"><i class="fas fa-trash"></i> Clear</button>
+            </div>
             <div class="slider-group w-full max-w-[40%]">
                 <label>Cleanliness (C) <span id="val-c" class="text-blue-400">10</span></label>
                 <input type="range" id="slide-c" min="1" max="40" value="10" oninput="liveFilterUpdate()">
@@ -172,9 +180,9 @@
                 <!-- Divisor for width. Smaller divisor -> larger block -> thicker lines. -->
                 <input type="range" id="slide-b" min="10" max="100" value="50" oninput="liveFilterUpdate()">
             </div>
-            <div class="w-[100%] h-0"></div> <!-- Break line -->
-            <button class="btn" style="flex:0.5;" onclick="showStep('step-crop')">Back</button>
-            <button class="btn btn-primary" onclick="acceptFilterHighRes()"><i class="fas fa-magic"></i> Accept & Edit</button>
+            <div class="w-[100%] h-0 mt-2"></div> <!-- Break line -->
+            <button class="btn" style="flex:0.5; font-size:14px;" onclick="showStep('step-crop')">Back</button>
+            <button class="btn btn-primary" style="font-size:14px;" onclick="acceptFilterHighRes()"><i class="fas fa-check"></i> Accept & Edit</button>
         </div>
     </div>
 
@@ -191,7 +199,7 @@
                 <button class="btn btn-icon tool-btn" id="tool-text" onclick="setTool('text')" style="background:transparent; height: 48px;"><i class="fas fa-font"></i></button>
                 <button class="btn btn-icon tool-btn" id="tool-eraser" onclick="setTool('eraser')" style="background:transparent; height: 48px;"><i class="fas fa-eraser"></i></button>
             </div>
-            <button class="btn btn-icon" onclick="runOCR()" style="background:#1e3a8a; color:#60a5fa;"><i class="fas fa-search"></i></button>
+            <button class="btn btn-icon" onclick="runOCRAndOverlay()" style="background:#1e3a8a; color:#60a5fa;" title="Scan & Insert Text"><i class="fas fa-file-signature"></i></button>
             <button class="btn btn-primary" onclick="exportFinalPDF()"><i class="fas fa-download"></i> Save PDF</button>
         </div>
     </div>
@@ -209,6 +217,7 @@
     
     let cropScale = 1;
     let points = [];
+    let photoRects = []; // Store manual photo protection regions
     let matFilterPreview = null; // Downscaled version for slider feedback
     let filterTimeout = null;
     
@@ -501,6 +510,139 @@
     }
 
     // --- PHASE 3: ADAPTIVE FILTER (INK SAVER) ---
+    let isDrawingPhoto = false;
+    let drawStartX = 0, drawStartY = 0;
+    let currentRectDiv = null;
+
+    function togglePhotoDraw() {
+        const overlays = document.getElementById('filter-overlays');
+        const btn = document.getElementById('btn-draw-photo');
+        if (overlays.style.display === 'block') {
+            overlays.style.display = 'none';
+            btn.classList.remove('btn-primary');
+            btn.classList.add('bg-zinc-800');
+        } else {
+            overlays.style.display = 'block';
+            btn.classList.remove('bg-zinc-800');
+            btn.classList.add('btn-primary');
+            if(!overlays.dataset.binded) {
+                overlays.dataset.binded = 'true';
+                overlays.addEventListener('pointerdown', (e) => {
+                    const rect = overlays.getBoundingClientRect();
+                    isDrawingPhoto = true;
+                    drawStartX = e.clientX - rect.left;
+                    drawStartY = e.clientY - rect.top;
+                    currentRectDiv = document.createElement('div');
+                    currentRectDiv.style.position = 'absolute';
+                    currentRectDiv.style.border = '2px dashed #ef4444';
+                    currentRectDiv.style.backgroundColor = 'rgba(239, 68, 68, 0.1)';
+                    overlays.appendChild(currentRectDiv);
+                    e.preventDefault();
+                });
+                overlays.addEventListener('pointermove', (e) => {
+                    if (!isDrawingPhoto || !currentRectDiv) return;
+                    const rect = overlays.getBoundingClientRect();
+                    let x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+                    let y = Math.max(0, Math.min(e.clientY - rect.top, rect.height));
+                    currentRectDiv.style.left = Math.min(x, drawStartX) + 'px';
+                    currentRectDiv.style.top = Math.min(y, drawStartY) + 'px';
+                    currentRectDiv.style.width = Math.abs(x - drawStartX) + 'px';
+                    currentRectDiv.style.height = Math.abs(y - drawStartY) + 'px';
+                });
+                const endDraw = (e) => {
+                    if (!isDrawingPhoto) return;
+                    isDrawingPhoto = false;
+                    const rect = overlays.getBoundingClientRect();
+                    let x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+                    let y = Math.max(0, Math.min(e.clientY - rect.top, rect.height));
+                    let rx = Math.min(x, drawStartX) / rect.width;
+                    let ry = Math.min(y, drawStartY) / rect.height;
+                    let rw = Math.abs(x - drawStartX) / rect.width;
+                    let rh = Math.abs(y - drawStartY) / rect.height;
+                    if (rw > 0.05 && rh > 0.05) photoRects.push({x: rx, y: ry, w: rw, h: rh});
+                    if (currentRectDiv) currentRectDiv.remove();
+                    currentRectDiv = null;
+                    renderPhotoRects();
+                    liveFilterUpdate();
+                };
+                overlays.addEventListener('pointerup', endDraw);
+                overlays.addEventListener('pointercancel', endDraw);
+            }
+        }
+    }
+
+    function clearPhotoArea() {
+        photoRects = [];
+        renderPhotoRects();
+        liveFilterUpdate();
+    }
+
+    function renderPhotoRects() {
+        const overlays = document.getElementById('filter-overlays');
+        Array.from(overlays.children).forEach(c => { if(c !== currentRectDiv) c.remove(); });
+        photoRects.forEach(r => {
+            let d = document.createElement('div');
+            d.style.position = 'absolute';
+            d.style.border = '2px solid #ef4444';
+            d.style.backgroundColor = 'rgba(239, 68, 68, 0.2)';
+            d.style.left = (r.x * 100) + '%';
+            d.style.top = (r.y * 100) + '%';
+            d.style.width = (r.w * 100) + '%';
+            d.style.height = (r.h * 100) + '%';
+            overlays.appendChild(d);
+        });
+    }
+
+    function autoDetectPhotos() {
+        if(!matFilterPreview) return;
+        showLoading("Detecting Photo Areas...");
+        setTimeout(() => {
+            try {
+                let gray = new cv.Mat();
+                let edges = new cv.Mat();
+                cv.cvtColor(matFilterPreview, gray, cv.COLOR_RGBA2GRAY);
+                cv.Canny(gray, edges, 50, 150);
+                
+                let M = cv.Mat.ones(15, 15, cv.CV_8U);
+                cv.dilate(edges, edges, M);
+                
+                let contours = new cv.MatVector();
+                let hierarchy = new cv.Mat();
+                cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+                
+                let totalArea = matFilterPreview.cols * matFilterPreview.rows;
+                for (let i = 0; i < contours.size(); ++i) {
+                    let cnt = contours.get(i);
+                    let rect = cv.boundingRect(cnt);
+                    let area = rect.width * rect.height;
+                    // Images usually form large dense edge blobs, filter out small text blobs
+                    if (area > totalArea * 0.05 && area < totalArea * 0.95 && rect.height > 50) {
+                        photoRects.push({
+                            x: rect.x / matFilterPreview.cols,
+                            y: rect.y / matFilterPreview.rows,
+                            w: rect.width / matFilterPreview.cols,
+                            h: rect.height / matFilterPreview.rows
+                        });
+                    }
+                    cnt.delete();
+                }
+                gray.delete(); edges.delete(); M.delete(); contours.delete(); hierarchy.delete();
+                
+                // Show overlays so user sees result
+                const overlays = document.getElementById('filter-overlays');
+                if (overlays.style.display !== 'block') togglePhotoDraw();
+                else renderPhotoRects();
+                
+                liveFilterUpdate();
+            } catch (err) {
+                console.error(err);
+                alert("Auto-detect failed");
+            } finally {
+                hideLoading();
+            }
+        }, 50);
+    }
+
     function liveFilterUpdate() {
         const valB = parseInt(document.getElementById('slide-b').value); // Divisor (10-100)
         const valC = parseInt(document.getElementById('slide-c').value); // Filter constant (1-40)
@@ -513,6 +655,7 @@
         filterTimeout = setTimeout(() => {
             let gray = null;
             let dst = null;
+            let dstColor = null;
             try {
                 // Calculate block size specifically relative to preview width (500)
                 let bsPreview = Math.floor(matFilterPreview.cols / valB);
@@ -521,11 +664,29 @@
 
                 gray = new cv.Mat();
                 dst = new cv.Mat();
+                dstColor = new cv.Mat();
                 
                 cv.cvtColor(matFilterPreview, gray, cv.COLOR_RGBA2GRAY);
                 cv.adaptiveThreshold(gray, dst, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, bsPreview, valC);
                 
-                cv.imshow('filter-canvas', dst);
+                cv.cvtColor(dst, dstColor, cv.COLOR_GRAY2RGBA);
+                
+                for (let pr of photoRects) {
+                    let rx = Math.max(0, Math.floor(pr.x * matFilterPreview.cols));
+                    let ry = Math.max(0, Math.floor(pr.y * matFilterPreview.rows));
+                    let rw = Math.min(matFilterPreview.cols - rx, Math.floor(pr.w * matFilterPreview.cols));
+                    let rh = Math.min(matFilterPreview.rows - ry, Math.floor(pr.h * matFilterPreview.rows));
+                    if (rw <= 0 || rh <= 0) continue;
+                    
+                    let roiRect = new cv.Rect(rx, ry, rw, rh);
+                    let roiOriginal = matFilterPreview.roi(roiRect);
+                    let roiDst = dstColor.roi(roiRect);
+                    roiOriginal.copyTo(roiDst);
+                    roiOriginal.delete();
+                    roiDst.delete();
+                }
+
+                cv.imshow('filter-canvas', dstColor);
                 
                 // Adjust canvas css for display
                 const ws = document.getElementById('filter-ws');
@@ -539,6 +700,7 @@
             } finally {
                 if (gray) gray.delete(); 
                 if (dst) dst.delete();
+                if (dstColor) dstColor.delete();
             }
 
         }, 100); // 100ms debounce
@@ -549,6 +711,7 @@
         setTimeout(() => {
             let gray = null;
             let dst = null;
+            let dstColor = null;
             try {
                 const valB = parseInt(document.getElementById('slide-b').value);
                 const valC = parseInt(document.getElementById('slide-c').value);
@@ -560,11 +723,30 @@
 
                 gray = new cv.Mat();
                 dst = new cv.Mat();
+                dstColor = new cv.Mat();
+                
                 cv.cvtColor(matWarped, gray, cv.COLOR_RGBA2GRAY);
                 cv.adaptiveThreshold(gray, dst, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, bsFinal, valC);
 
+                cv.cvtColor(dst, dstColor, cv.COLOR_GRAY2RGBA);
+                
+                for (let pr of photoRects) {
+                    let rx = Math.max(0, Math.floor(pr.x * matWarped.cols));
+                    let ry = Math.max(0, Math.floor(pr.y * matWarped.rows));
+                    let rw = Math.min(matWarped.cols - rx, Math.floor(pr.w * matWarped.cols));
+                    let rh = Math.min(matWarped.rows - ry, Math.floor(pr.h * matWarped.rows));
+                    if (rw <= 0 || rh <= 0) continue;
+                    
+                    let roiRect = new cv.Rect(rx, ry, rw, rh);
+                    let roiOriginal = matWarped.roi(roiRect);
+                    let roiDst = dstColor.roi(roiRect);
+                    roiOriginal.copyTo(roiDst);
+                    roiOriginal.delete();
+                    roiDst.delete();
+                }
+
                 const outCanvas = document.createElement('canvas');
-                cv.imshow(outCanvas, dst);
+                cv.imshow(outCanvas, dstColor);
                 filteredHighResDataUrl = outCanvas.toDataURL('image/jpeg', 0.98);
 
                 showStep('step-edit');
@@ -575,6 +757,7 @@
             } finally {
                 if (gray) gray.delete(); 
                 if (dst) dst.delete();
+                if (dstColor) dstColor.delete();
                 hideLoading();
             }
         }, 50);
@@ -630,15 +813,42 @@
     }
 
     // --- UKR+ENG OCR ---
-    async function runOCR() {
-        showLoading("AI Vision (UKR+ENG)...");
+    async function runOCRAndOverlay() {
+        showLoading("Scanning Text (UKR+ENG)...");
         try {
-            const w = await Tesseract.createWorker('ukr+eng');
+            const w = await Tesseract.createWorker(['eng', 'ukr']);
             const ret = await w.recognize(filteredHighResDataUrl);
-            document.getElementById('ocr-textarea').value = ret.data.text;
-            document.getElementById('ocr-modal').style.display = 'flex';
+            
+            fabricApp.isDrawingMode = false;
+            
+            // Loop through lines to insert text at correct places
+            if (ret.data && ret.data.lines) {
+                ret.data.lines.forEach(line => {
+                    const text = line.text.trim();
+                    if (!text) return;
+                    const bbox = line.bbox; // {x0, y0, x1, y1}
+                    
+                    const fText = new fabric.IText(text, {
+                        left: bbox.x0,
+                        top: bbox.y0 - 5, // optical adjustment
+                        fontSize: Math.max(16, bbox.y1 - bbox.y0),
+                        fontFamily: 'sans-serif',
+                        fill: '#2563eb', // blue to stand out slightly
+                        backgroundColor: 'rgba(255, 255, 255, 0.9)',
+                        transparentCorners: false
+                    });
+                    fabricApp.add(fText);
+                });
+                fabricApp.renderAll();
+                
+                // Show raw text in modal as fallback
+                document.getElementById('ocr-textarea').value = ret.data.text;
+                document.getElementById('ocr-modal').style.display = 'flex';
+                setTool('text');
+            }
             await w.terminate();
         } catch(e) {
+            console.error(e);
             alert("OCR Failed: " + e.message);
         }
         hideLoading();

@@ -250,101 +250,149 @@
         reader.onload = e => {
             const img = new Image();
             img.onload = () => {
+                let width = img.width;
+                let height = img.height;
+                const maxDim = 2500;
+                
+                if (width > maxDim || height > maxDim) {
+                    const ratio = Math.min(maxDim / width, maxDim / height);
+                    width = Math.floor(width * ratio);
+                    height = Math.floor(height * ratio);
+                }
+                
                 const c = document.createElement('canvas');
-                c.width = img.width; c.height = img.height;
+                c.width = width; c.height = height;
                 const ctx = c.getContext('2d');
-                ctx.drawImage(img, 0, 0);
+                ctx.drawImage(img, 0, 0, width, height);
 
                 setTimeout(() => {
-                    if(matOriginal) matOriginal.delete();
-                    if(matRotated) matRotated.delete();
+                    try {
+                        if(matOriginal) matOriginal.delete();
+                        if(matRotated) matRotated.delete();
 
-                    matOriginal = cv.imread(c);
-                    matRotated = matOriginal.clone();
-                    
-                    showStep('step-rotate');
-                    renderRotateView();
-                    hideLoading();
+                        matOriginal = cv.imread(c);
+                        matRotated = matOriginal.clone();
+                        
+                        showStep('step-rotate');
+                        renderRotateView();
+                    } catch (err) {
+                        console.error(err);
+                        alert("Error processing image. Please try again.");
+                    } finally {
+                        hideLoading();
+                    }
                 }, 50);
             };
+            img.onerror = () => {
+                alert("Failed to load image.");
+                hideLoading();
+            };
             img.src = e.target.result;
+        };
+        reader.onerror = () => {
+            alert("Failed to read file.");
+            hideLoading();
         };
         reader.readAsDataURL(file);
     }
 
     function renderRotateView() {
-        const ws = document.getElementById('rotate-ws');
-        const c = document.getElementById('rotate-canvas');
-        
-        const pad = 40;
-        const scale = Math.min((ws.clientWidth - pad) / matRotated.cols, (ws.clientHeight - pad) / matRotated.rows);
-        const w = matRotated.cols * scale;
-        const h = matRotated.rows * scale;
-        
-        // Render downscaled preview to avoid large canvases on mobile
-        const dsize = new cv.Size(Math.floor(w), Math.floor(h));
-        const dst = new cv.Mat();
-        cv.resize(matRotated, dst, dsize, 0, 0, cv.INTER_AREA);
-        cv.imshow(c, dst);
-        dst.delete();
-        
-        c.style.width = w + 'px';
-        c.style.height = h + 'px';
+        try {
+            const ws = document.getElementById('rotate-ws');
+            const c = document.getElementById('rotate-canvas');
+            
+            const pad = 40;
+            const scale = Math.min((ws.clientWidth - pad) / matRotated.cols, (ws.clientHeight - pad) / matRotated.rows);
+            const w = Math.max(1, matRotated.cols * scale);
+            const h = Math.max(1, matRotated.rows * scale);
+            
+            // Render downscaled preview to avoid large canvases on mobile
+            const dsize = new cv.Size(Math.floor(w), Math.floor(h));
+            const dst = new cv.Mat();
+            cv.resize(matRotated, dst, dsize, 0, 0, cv.INTER_AREA);
+            cv.imshow(c, dst);
+            dst.delete();
+            
+            c.style.width = w + 'px';
+            c.style.height = h + 'px';
+        } catch (e) {
+            console.error("renderRotateView failed: ", e);
+        }
     }
 
     function rotateHighRes(angle) {
+        if (!isCvReady) {
+            alert("OpenCV is not ready yet!");
+            return;
+        }
         showLoading("Re-orienting...");
         setTimeout(() => {
-            const dst = new cv.Mat();
-            if (angle === 90) {
-                cv.transpose(matRotated, dst);
-                cv.flip(dst, dst, 1);
-            } else if (angle === -90) {
-                cv.transpose(matRotated, dst);
-                cv.flip(dst, dst, 0);
+            try {
+                const dst = new cv.Mat();
+                if (angle === 90) {
+                    cv.transpose(matRotated, dst);
+                    cv.flip(dst, dst, 1);
+                } else if (angle === -90) {
+                    cv.transpose(matRotated, dst);
+                    cv.flip(dst, dst, 0);
+                }
+                matRotated.delete();
+                matRotated = dst;
+                renderRotateView();
+            } catch (err) {
+                console.error(err);
+                alert("Failed to rotate image.");
+            } finally {
+                hideLoading();
             }
-            matRotated.delete();
-            matRotated = dst;
-            renderRotateView();
-            hideLoading();
         }, 50);
     }
 
     // --- PHASE 2: CROP (PERSPECTIVE) ---
     function initCropPhase() {
+        if (!isCvReady) {
+            alert("OpenCV is not ready yet!");
+            return;
+        }
         showLoading("Generating Smart Crop...");
         setTimeout(() => {
-            const ws = document.getElementById('crop-ws');
-            const cw = document.getElementById('crop-wrapper');
-            const c = document.getElementById('crop-canvas');
-            
-            const pad = 80; // Space for handles
-            cropScale = Math.min((ws.clientWidth - pad) / matRotated.cols, (ws.clientHeight - pad) / matRotated.rows);
-            
-            const w = matRotated.cols * cropScale;
-            const h = matRotated.rows * cropScale;
-            
-            cw.style.width = w + 'px';
-            cw.style.height = h + 'px';
-            
-            const dst = new cv.Mat();
-            cv.resize(matRotated, dst, new cv.Size(Math.floor(w), Math.floor(h)), 0, 0, cv.INTER_AREA);
-            cv.imshow('crop-canvas', dst);
-            dst.delete();
+            try {
+                const ws = document.getElementById('crop-ws');
+                const cw = document.getElementById('crop-wrapper');
+                const c = document.getElementById('crop-canvas');
+                
+                const pad = 80; // Space for handles
+                cropScale = Math.min((ws.clientWidth - pad) / matRotated.cols, (ws.clientHeight - pad) / matRotated.rows);
+                
+                const w = matRotated.cols * cropScale;
+                const h = matRotated.rows * cropScale;
+                
+                cw.style.width = w + 'px';
+                cw.style.height = h + 'px';
+                
+                const dst = new cv.Mat();
+                cv.resize(matRotated, dst, new cv.Size(Math.floor(w), Math.floor(h)), 0, 0, cv.INTER_AREA);
+                cv.imshow('crop-canvas', dst);
+                dst.delete();
 
-            // Set 4 handles strictly at 4 corners
-            points = [
-                {x: 0, y: 0},
-                {x: w, y: 0},
-                {x: w, y: h},
-                {x: 0, y: h}
-            ];
+                // Set 4 handles strictly at 4 corners
+                points = [
+                    {x: 0, y: 0},
+                    {x: w, y: 0},
+                    {x: w, y: h},
+                    {x: 0, y: h}
+                ];
 
-            updateHandlesUI();
-            setupDragSystem();
-            
-            showStep('step-crop');
-            hideLoading();
+                updateHandlesUI();
+                setupDragSystem();
+                
+                showStep('step-crop');
+            } catch (err) {
+                console.error(err);
+                alert("Error during crop initialization: " + err.message);
+            } finally {
+                hideLoading();
+            }
         }, 50);
     }
 
@@ -399,23 +447,32 @@
     }
 
     function warpHighRes() {
+        if (!isCvReady) {
+            alert("OpenCV not ready yet. Please wait.");
+            return;
+        }
+        if (!points || points.length !== 4) {
+            alert("Please adjust all 4 corners before aligning.");
+            return;
+        }
         showLoading("A4 High-Res Extraction...");
         setTimeout(() => {
+            let srcArray = null;
+            let dstArray = null;
+            let M = null;
             try {
                 // Map points back to high resolution
                 const hrPoints = points.map(p => [p.x / cropScale, p.y / cropScale]).flat();
                 
-                const srcArray = cv.matFromArray(4, 1, cv.CV_32FC2, hrPoints);
-                const dstArray = cv.matFromArray(4, 1, cv.CV_32FC2, [0,0, A4_W,0, A4_W,A4_H, 0,A4_H]);
+                srcArray = cv.matFromArray(4, 1, cv.CV_32FC2, hrPoints);
+                dstArray = cv.matFromArray(4, 1, cv.CV_32FC2, [0,0, A4_W,0, A4_W,A4_H, 0,A4_H]);
                 
-                const M = cv.getPerspectiveTransform(srcArray, dstArray);
+                M = cv.getPerspectiveTransform(srcArray, dstArray);
                 
                 if(matWarped) matWarped.delete();
                 matWarped = new cv.Mat();
                 cv.warpPerspective(matRotated, matWarped, M, new cv.Size(A4_W, A4_H), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar(255,255,255,255));
                 
-                srcArray.delete(); dstArray.delete(); M.delete();
-
                 // Generate downscaled preview for Filter phase
                 if(matFilterPreview) matFilterPreview.delete();
                 matFilterPreview = new cv.Mat();
@@ -426,9 +483,14 @@
                 showStep('step-filter');
                 liveFilterUpdate();
             } catch (e) {
-                alert("Align Error: " + e.message);
+                console.error(e);
+                alert("Align Error: Failed to warp image. Check dimensions.");
+            } finally {
+                if (srcArray) srcArray.delete(); 
+                if (dstArray) dstArray.delete(); 
+                if (M) M.delete();
+                hideLoading();
             }
-            hideLoading();
         }, 50);
     }
 
@@ -443,27 +505,35 @@
         if (filterTimeout) clearTimeout(filterTimeout);
         
         filterTimeout = setTimeout(() => {
-            // Calculate block size specifically relative to preview width (500)
-            let bsPreview = Math.floor(matFilterPreview.cols / valB);
-            if(bsPreview % 2 === 0) bsPreview++;
-            if(bsPreview < 3) bsPreview = 3;
+            let gray = null;
+            let dst = null;
+            try {
+                // Calculate block size specifically relative to preview width (500)
+                let bsPreview = Math.floor(matFilterPreview.cols / valB);
+                if(bsPreview % 2 === 0) bsPreview++;
+                if(bsPreview < 3) bsPreview = 3;
 
-            const gray = new cv.Mat();
-            const dst = new cv.Mat();
-            
-            cv.cvtColor(matFilterPreview, gray, cv.COLOR_RGBA2GRAY);
-            cv.adaptiveThreshold(gray, dst, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, bsPreview, valC);
-            
-            cv.imshow('filter-canvas', dst);
-            gray.delete(); dst.delete();
-            
-            // Adjust canvas css for display
-            const ws = document.getElementById('filter-ws');
-            const pad = 40;
-            const scale = Math.min((ws.clientWidth - pad) / 500, (ws.clientHeight - pad) / (500 * 1.414));
-            const c = document.getElementById('filter-canvas');
-            c.style.width = (500 * scale) + 'px';
-            c.style.height = (500 * 1.414 * scale) + 'px';
+                gray = new cv.Mat();
+                dst = new cv.Mat();
+                
+                cv.cvtColor(matFilterPreview, gray, cv.COLOR_RGBA2GRAY);
+                cv.adaptiveThreshold(gray, dst, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, bsPreview, valC);
+                
+                cv.imshow('filter-canvas', dst);
+                
+                // Adjust canvas css for display
+                const ws = document.getElementById('filter-ws');
+                const pad = 40;
+                const scale = Math.min((ws.clientWidth - pad) / 500, (ws.clientHeight - pad) / (500 * 1.414));
+                const c = document.getElementById('filter-canvas');
+                c.style.width = (500 * scale) + 'px';
+                c.style.height = (500 * 1.414 * scale) + 'px';
+            } catch (e) {
+                console.error("Live filter preview failed:", e);
+            } finally {
+                if (gray) gray.delete(); 
+                if (dst) dst.delete();
+            }
 
         }, 100); // 100ms debounce
     }
@@ -471,28 +541,36 @@
     function acceptFilterHighRes() {
         showLoading("Applying Filter to 8 Megapixels...");
         setTimeout(() => {
-            const valB = parseInt(document.getElementById('slide-b').value);
-            const valC = parseInt(document.getElementById('slide-c').value);
+            let gray = null;
+            let dst = null;
+            try {
+                const valB = parseInt(document.getElementById('slide-b').value);
+                const valC = parseInt(document.getElementById('slide-c').value);
 
-            // Calculate block size for FULL RES (2480 width)
-            let bsFinal = Math.floor(A4_W / valB);
-            if(bsFinal % 2 === 0) bsFinal++;
-            if(bsFinal < 3) bsFinal = 3;
+                // Calculate block size for FULL RES (2480 width)
+                let bsFinal = Math.floor(A4_W / valB);
+                if(bsFinal % 2 === 0) bsFinal++;
+                if(bsFinal < 3) bsFinal = 3;
 
-            const gray = new cv.Mat();
-            const dst = new cv.Mat();
-            cv.cvtColor(matWarped, gray, cv.COLOR_RGBA2GRAY);
-            cv.adaptiveThreshold(gray, dst, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, bsFinal, valC);
+                gray = new cv.Mat();
+                dst = new cv.Mat();
+                cv.cvtColor(matWarped, gray, cv.COLOR_RGBA2GRAY);
+                cv.adaptiveThreshold(gray, dst, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, bsFinal, valC);
 
-            const outCanvas = document.createElement('canvas');
-            cv.imshow(outCanvas, dst);
-            filteredHighResDataUrl = outCanvas.toDataURL('image/jpeg', 0.98);
+                const outCanvas = document.createElement('canvas');
+                cv.imshow(outCanvas, dst);
+                filteredHighResDataUrl = outCanvas.toDataURL('image/jpeg', 0.98);
 
-            gray.delete(); dst.delete();
-            
-            showStep('step-edit');
-            initFabricSystem();
-            hideLoading();
+                showStep('step-edit');
+                initFabricSystem();
+            } catch (e) {
+                console.error(e);
+                alert("Failed to apply High-Res filter.");
+            } finally {
+                if (gray) gray.delete(); 
+                if (dst) dst.delete();
+                hideLoading();
+            }
         }, 50);
     }
 

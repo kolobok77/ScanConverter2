@@ -496,7 +496,7 @@
                 cv.resize(matWarped, matFilterPreview, new cv.Size(500, Math.floor(A4_H * ratio)), 0, 0, cv.INTER_AREA);
 
                 showStep('step-filter');
-                liveFilterUpdate();
+                autoDetectPhotos();
             } catch (e) {
                 console.error(e);
                 alert("Align Error: Failed to warp image. Check dimensions.");
@@ -580,7 +580,7 @@
     function renderPhotoRects() {
         const overlays = document.getElementById('filter-overlays');
         Array.from(overlays.children).forEach(c => { if(c !== currentRectDiv) c.remove(); });
-        photoRects.forEach(r => {
+        photoRects.forEach((r, idx) => {
             let d = document.createElement('div');
             d.style.position = 'absolute';
             d.style.border = '2px solid #ef4444';
@@ -589,6 +589,98 @@
             d.style.top = (r.y * 100) + '%';
             d.style.width = (r.w * 100) + '%';
             d.style.height = (r.h * 100) + '%';
+            d.style.pointerEvents = 'auto'; // allow interaction
+            d.style.cursor = 'move';
+            
+            // Delete handle
+            let del = document.createElement('div');
+            del.innerHTML = '&times;';
+            del.style.position = 'absolute';
+            del.style.top = '-12px';
+            del.style.right = '-12px';
+            del.style.width = '24px';
+            del.style.height = '24px';
+            del.style.background = 'white';
+            del.style.color = '#ef4444';
+            del.style.borderRadius = '50%';
+            del.style.border = '2px solid #ef4444';
+            del.style.cursor = 'pointer';
+            del.style.display = 'flex';
+            del.style.alignItems = 'center';
+            del.style.justifyContent = 'center';
+            del.style.fontWeight = 'bold';
+            del.style.fontSize = '16px';
+            del.style.zIndex = '10';
+            del.addEventListener('pointerdown', (e) => {
+                e.stopPropagation();
+                photoRects.splice(idx, 1);
+                renderPhotoRects();
+                liveFilterUpdate();
+            });
+            d.appendChild(del);
+            
+            // Resize handle
+            let res = document.createElement('div');
+            res.style.position = 'absolute';
+            res.style.right = '-6px';
+            res.style.bottom = '-6px';
+            res.style.width = '12px';
+            res.style.height = '12px';
+            res.style.background = '#ef4444';
+            res.style.cursor = 'nwse-resize';
+            res.style.zIndex = '10';
+            res.addEventListener('pointerdown', (e) => {
+                e.stopPropagation();
+                let startX = e.clientX;
+                let startY = e.clientY;
+                let startW = r.w;
+                let startH = r.h;
+                const rect = overlays.getBoundingClientRect();
+                
+                const onMove = (ev) => {
+                    let dx = (ev.clientX - startX) / rect.width;
+                    let dy = (ev.clientY - startY) / rect.height;
+                    r.w = Math.max(0.01, startW + dx);
+                    r.h = Math.max(0.01, startH + dy);
+                    d.style.width = (r.w * 100) + '%';
+                    d.style.height = (r.h * 100) + '%';
+                };
+                const onUp = () => {
+                    window.removeEventListener('pointermove', onMove);
+                    window.removeEventListener('pointerup', onUp);
+                    liveFilterUpdate();
+                };
+                window.addEventListener('pointermove', onMove);
+                window.addEventListener('pointerup', onUp);
+            });
+            d.appendChild(res);
+
+            // Drag handle (the box itself)
+            d.addEventListener('pointerdown', (e) => {
+                e.stopPropagation();
+                let startX = e.clientX;
+                let startY = e.clientY;
+                let startLeft = r.x;
+                let startTop = r.y;
+                const rect = overlays.getBoundingClientRect();
+                
+                const onMove = (ev) => {
+                    let dx = (ev.clientX - startX) / rect.width;
+                    let dy = (ev.clientY - startY) / rect.height;
+                    r.x = Math.max(0, Math.min(1 - r.w, startLeft + dx));
+                    r.y = Math.max(0, Math.min(1 - r.h, startTop + dy));
+                    d.style.left = (r.x * 100) + '%';
+                    d.style.top = (r.y * 100) + '%';
+                };
+                const onUp = () => {
+                    window.removeEventListener('pointermove', onMove);
+                    window.removeEventListener('pointerup', onUp);
+                    liveFilterUpdate();
+                };
+                window.addEventListener('pointermove', onMove);
+                window.addEventListener('pointerup', onUp);
+            });
+            
             overlays.appendChild(d);
         });
     }
@@ -596,6 +688,7 @@
     function autoDetectPhotos() {
         if(!matFilterPreview) return;
         showLoading("Detecting Photo Areas...");
+        photoRects = [];
         setTimeout(() => {
             try {
                 let gray = new cv.Mat();
@@ -816,7 +909,7 @@
     async function runOCRAndOverlay() {
         showLoading("Scanning Text (UKR+ENG)...");
         try {
-            const w = await Tesseract.createWorker(['eng', 'ukr']);
+            const w = await Tesseract.createWorker('ukr+eng');
             const ret = await w.recognize(filteredHighResDataUrl);
             
             fabricApp.isDrawingMode = false;

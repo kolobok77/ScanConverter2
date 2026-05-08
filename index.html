@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>High-Res Smart Scanner PRO</title>
+    
+    <!-- Dependencies -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script async src="https://docs.opencv.org/4.5.5/opencv.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+    <style>
+        :root {
+            --bg: #09090b;
+            --surface: #18181b;
+            --accent: #3b82f6;
+            --accent-active: #2563eb;
+            --text: #f4f4f5;
+        }
+
+        body {
+            background-color: var(--bg);
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            touch-action: none;
+        }
+
+        /* Layout structure */
+        header { flex: 0 0 60px; background: var(--surface); display: flex; align-items: center; padding: 0 20px; font-weight: 800; border-bottom: 1px solid rgba(255,255,255,0.05); z-index: 50; }
+        .workspace { flex: 1; display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; padding: 20px; box-sizing: border-box; }
+        .bottom-bar { flex: 0 0 80px; background: var(--surface); border-top: 1px solid rgba(255,255,255,0.05); display: flex; align-items: center; justify-content: center; gap: 12px; padding: 0 15px; z-index: 50; }
+        
+        .step { display: none; flex-direction: column; height: 100%; width: 100%; }
+        .step.active { display: flex; }
+
+        /* Buttons */
+        .btn { height: 56px; border: none; border-radius: 14px; font-size: 16px; font-weight: 700; background: #27272a; color: white; display: flex; align-items: center; justify-content: center; gap: 10px; cursor: pointer; transition: 0.1s; flex: 1; user-select: none; }
+        .btn:active { transform: scale(0.96); }
+        .btn-primary { background: var(--accent); }
+        .btn-primary:active { background: var(--accent-active); }
+        .btn-icon { flex: 0 0 56px; }
+
+        /* Tools Active State */
+        .tool-btn.active-tool { background: var(--accent) !important; color: white; }
+
+        /* Canvas Containers */
+        .preview-canvas { box-shadow: 0 10px 40px rgba(0,0,0,0.5); object-fit: contain; }
+        
+        /* Crop Handles */
+        #crop-wrapper { position: relative; touch-action: none; }
+        #crop-canvas { display: block; width: 100%; height: 100%; }
+        .handle { position: absolute; width: 50px; height: 50px; background: rgba(239, 68, 68, 0.5); border: 2.5px solid white; border-radius: 50%; transform: translate(-50%, -50%); cursor: move; touch-action: none; z-index: 100; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
+        .handle::after { content: ''; position: absolute; width: 10px; height: 10px; background: white; border-radius: 50%; top: 50%; left: 50%; transform: translate(-50%, -50%); }
+
+        /* Overlays */
+        #loading-overlay, #ocr-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 9999; display: none; align-items: center; justify-content: center; flex-direction: column; backdrop-filter: blur(5px); }
+        .spinner { width: 48px; height: 48px; border: 4px solid rgba(255,255,255,0.1); border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 20px; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Sliders */
+        .slider-group { display: flex; flex-direction: column; width: 100%; max-width: 250px; margin: 0 10px; }
+        .slider-group label { display: flex; justify-content: space-between; font-size: 11px; font-weight: bold; color: #a1a1aa; text-transform: uppercase; margin-bottom: 8px; }
+        input[type="range"] { -webkit-appearance: none; background: #3f3f46; height: 6px; border-radius: 3px; outline: none; }
+        input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; background: var(--accent); border-radius: 50%; }
+    
+        /* Fabric Container fixes */
+        .canvas-container { margin: 0 auto; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
+    </style>
+</head>
+<body>
+
+    <!-- Load Overlay -->
+    <div id="loading-overlay">
+        <div class="spinner"></div>
+        <div id="loading-text" class="text-white font-bold tracking-widest text-sm uppercase">Initializing System...</div>
+    </div>
+
+    <!-- OCR Modal -->
+    <div id="ocr-modal">
+        <div class="bg-[#18181b] w-full max-w-lg rounded-2xl p-6 m-4 flex flex-col gap-4 border border-zinc-800 shadow-2xl">
+            <div class="flex justify-between items-center border-b border-zinc-800 pb-4">
+                <h3 class="font-bold flex items-center gap-2"><i class="fas fa-language text-blue-500"></i> OCR Extracted Text</h3>
+                <button onclick="document.getElementById('ocr-modal').style.display='none'" class="text-zinc-500 hover:text-white"><i class="fas fa-times text-xl"></i></button>
+            </div>
+            <textarea id="ocr-textarea" class="w-full h-[300px] bg-black text-emerald-400 font-mono text-sm p-4 rounded-xl border border-zinc-800 resize-none outline-none"></textarea>
+            <button class="btn btn-primary" onclick="copyOcrText()"><i class="fas fa-copy"></i> Copy Clean Text</button>
+        </div>
+    </div>
+
+    <header>
+        <span class="text-blue-500 mr-2"><i class="fas fa-file-invoice"></i></span>
+        Scanner<span class="font-light">PRO</span>
+    </header>
+
+    <!-- STEP 0: UPLOAD -->
+    <div id="step-upload" class="step active">
+        <div class="workspace">
+            <div class="bg-[#18181b] p-8 rounded-[32px] w-full max-w-sm text-center border border-zinc-800">
+                <div class="w-20 h-20 bg-blue-500/10 rounded-2xl mx-auto flex items-center justify-center mb-6">
+                    <i class="fas fa-camera text-3xl text-blue-500"></i>
+                </div>
+                <h2 class="text-xl font-bold mb-2">High-Res Scanner</h2>
+                <p class="text-sm text-zinc-400 mb-8 leading-relaxed">Upload a clear photo of your paper test. Processing operates at full 300 PPI A4 resolution.</p>
+                <button class="btn btn-primary" onclick="document.getElementById('file-in').click()">
+                    <i class="fas fa-image"></i> Select Photo
+                </button>
+                <input type="file" id="file-in" class="hidden" accept="image/*" onchange="handleUpload(event)">
+            </div>
+        </div>
+    </div>
+
+    <!-- STEP 1: ROTATE -->
+    <div id="step-rotate" class="step">
+        <div class="workspace" id="rotate-ws">
+            <canvas id="rotate-canvas" class="preview-canvas bg-white"></canvas>
+        </div>
+        <div class="bottom-bar">
+            <button class="btn" onclick="rotateHighRes(-90)"><i class="fas fa-undo"></i> 90°</button>
+            <button class="btn" onclick="rotateHighRes(90)"><i class="fas fa-redo"></i> 90°</button>
+            <button class="btn btn-primary" onclick="initCropPhase()"><i class="fas fa-check"></i> Crop</button>
+        </div>
+    </div>
+
+    <!-- STEP 2: CROP (PERSPECTIVE) -->
+    <div id="step-crop" class="step">
+        <div class="workspace" id="crop-ws">
+            <div id="crop-wrapper">
+                <canvas id="crop-canvas"></canvas>
+                <!-- Handles -->
+                <div class="handle" id="h0" data-idx="0"></div>
+                <div class="handle" id="h1" data-idx="1"></div>
+                <div class="handle" id="h2" data-idx="2"></div>
+                <div class="handle" id="h3" data-idx="3"></div>
+            </div>
+        </div>
+        <div class="bottom-bar">
+            <button class="btn btn-icon" onclick="showStep('step-rotate')"><i class="fas fa-arrow-left"></i></button>
+            <button class="btn btn-primary" onclick="warpHighRes()"><i class="fas fa-vector-square"></i> Align Document</button>
+        </div>
+    </div>
+
+    <!-- STEP 3: FILTER (INK SAVER) -->
+    <div id="step-filter" class="step">
+        <div class="workspace" id="filter-ws">
+            <canvas id="filter-canvas" class="preview-canvas bg-white"></canvas>
+        </div>
+        <div class="bottom-bar" style="height: auto; padding: 15px; flex-wrap: wrap; justify-content: space-evenly;">
+            <div class="slider-group w-full max-w-[40%]">
+                <label>Cleanliness (C) <span id="val-c" class="text-blue-400">10</span></label>
+                <input type="range" id="slide-c" min="1" max="40" value="10" oninput="liveFilterUpdate()">
+            </div>
+            <div class="slider-group w-full max-w-[40%]">
+                <label>Text Thickness <span id="val-b" class="text-blue-400">50</span></label>
+                <!-- Divisor for width. Smaller divisor -> larger block -> thicker lines. -->
+                <input type="range" id="slide-b" min="10" max="100" value="50" oninput="liveFilterUpdate()">
+            </div>
+            <div class="w-[100%] h-0"></div> <!-- Break line -->
+            <button class="btn" style="flex:0.5;" onclick="showStep('step-crop')">Back</button>
+            <button class="btn btn-primary" onclick="acceptFilterHighRes()"><i class="fas fa-magic"></i> Accept & Edit</button>
+        </div>
+    </div>
+
+    <!-- STEP 4: EDITOR & OCR -->
+    <div id="step-edit" class="step">
+        <div class="workspace" id="edit-ws" style="padding: 10px;">
+            <div id="fabric-wrapper">
+                <canvas id="fabric-canvas"></canvas>
+            </div>
+        </div>
+        <div class="bottom-bar">
+            <div class="flex gap-1.5" style="background:#27272a; padding: 4px; border-radius: 16px;">
+                <button class="btn btn-icon tool-btn active-tool" id="tool-pen" onclick="setTool('pen')" style="background:transparent; height: 48px;"><i class="fas fa-pen"></i></button>
+                <button class="btn btn-icon tool-btn" id="tool-text" onclick="setTool('text')" style="background:transparent; height: 48px;"><i class="fas fa-font"></i></button>
+                <button class="btn btn-icon tool-btn" id="tool-eraser" onclick="setTool('eraser')" style="background:transparent; height: 48px;"><i class="fas fa-eraser"></i></button>
+            </div>
+            <button class="btn btn-icon" onclick="runOCR()" style="background:#1e3a8a; color:#60a5fa;"><i class="fas fa-search"></i></button>
+            <button class="btn btn-primary" onclick="exportFinalPDF()"><i class="fas fa-download"></i> Save PDF</button>
+        </div>
+    </div>
+
+<script>
+    // System Constants
+    const A4_W = 2480; // 300 PPI
+    const A4_H = 3508; 
+    
+    // Globals
+    let matOriginal = null;
+    let matRotated = null;
+    let matWarped = null; // High res perspective corrected
+    let filteredHighResDataUrl = null;
+    
+    let cropScale = 1;
+    let points = [];
+    let matFilterPreview = null; // Downscaled version for slider feedback
+    let filterTimeout = null;
+    
+    let fabricApp = null;
+    let isCvReady = false;
+
+    // UI Helpers
+    function onOpenCvReady() {
+        if(typeof cv !== 'undefined' && typeof cv.Mat === 'function') {
+            isCvReady = true;
+            hideLoading();
+        } else {
+            setTimeout(onOpenCvReady, 100);
+        }
+    }
+    
+    // Start checking for OpenCV immediately
+    onOpenCvReady();
+    
+    function showLoading(msg) {
+        document.getElementById('loading-text').innerText = msg;
+        document.getElementById('loading-overlay').style.display = 'flex';
+    }
+    function hideLoading() {
+        document.getElementById('loading-overlay').style.display = 'none';
+    }
+    function showStep(s) {
+        document.querySelectorAll('.step').forEach(e => e.classList.remove('active'));
+        document.getElementById(s).classList.add('active');
+    }
+
+    // --- PHASE 1: UPLOAD & ROTATE ---
+    function handleUpload(event) {
+        const file = event.target.files[0];
+        if(!file) return;
+        showLoading("Loading High-Res Image...");
+        
+        const reader = new FileReader();
+        reader.onload = e => {
+            const img = new Image();
+            img.onload = () => {
+                const c = document.createElement('canvas');
+                c.width = img.width; c.height = img.height;
+                const ctx = c.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+
+                setTimeout(() => {
+                    if(matOriginal) matOriginal.delete();
+                    if(matRotated) matRotated.delete();
+
+                    matOriginal = cv.imread(c);
+                    matRotated = matOriginal.clone();
+                    
+                    showStep('step-rotate');
+                    renderRotateView();
+                    hideLoading();
+                }, 50);
+            };
+            img.src = e.target.result;
+        };
+        reader.readAsDataURL(file);
+    }
+
+    function renderRotateView() {
+        const ws = document.getElementById('rotate-ws');
+        const c = document.getElementById('rotate-canvas');
+        
+        const pad = 40;
+        const scale = Math.min((ws.clientWidth - pad) / matRotated.cols, (ws.clientHeight - pad) / matRotated.rows);
+        const w = matRotated.cols * scale;
+        const h = matRotated.rows * scale;
+        
+        // Render downscaled preview to avoid large canvases on mobile
+        const dsize = new cv.Size(Math.floor(w), Math.floor(h));
+        const dst = new cv.Mat();
+        cv.resize(matRotated, dst, dsize, 0, 0, cv.INTER_AREA);
+        cv.imshow(c, dst);
+        dst.delete();
+        
+        c.style.width = w + 'px';
+        c.style.height = h + 'px';
+    }
+
+    function rotateHighRes(angle) {
+        showLoading("Re-orienting...");
+        setTimeout(() => {
+            const dst = new cv.Mat();
+            if (angle === 90) {
+                cv.transpose(matRotated, dst);
+                cv.flip(dst, dst, 1);
+            } else if (angle === -90) {
+                cv.transpose(matRotated, dst);
+                cv.flip(dst, dst, 0);
+            }
+            matRotated.delete();
+            matRotated = dst;
+            renderRotateView();
+            hideLoading();
+        }, 50);
+    }
+
+    // --- PHASE 2: CROP (PERSPECTIVE) ---
+    function initCropPhase() {
+        showLoading("Generating Smart Crop...");
+        setTimeout(() => {
+            const ws = document.getElementById('crop-ws');
+            const cw = document.getElementById('crop-wrapper');
+            const c = document.getElementById('crop-canvas');
+            
+            const pad = 80; // Space for handles
+            cropScale = Math.min((ws.clientWidth - pad) / matRotated.cols, (ws.clientHeight - pad) / matRotated.rows);
+            
+            const w = matRotated.cols * cropScale;
+            const h = matRotated.rows * cropScale;
+            
+            cw.style.width = w + 'px';
+            cw.style.height = h + 'px';
+            
+            const dst = new cv.Mat();
+            cv.resize(matRotated, dst, new cv.Size(Math.floor(w), Math.floor(h)), 0, 0, cv.INTER_AREA);
+            cv.imshow('crop-canvas', dst);
+            dst.delete();
+
+            // Set 4 handles strictly at 4 corners
+            points = [
+                {x: 0, y: 0},
+                {x: w, y: 0},
+                {x: w, y: h},
+                {x: 0, y: h}
+            ];
+
+            updateHandlesUI();
+            setupDragSystem();
+            
+            showStep('step-crop');
+            hideLoading();
+        }, 50);
+    }
+
+    function updateHandlesUI() {
+        for(let i=0; i<4; i++) {
+            const h = document.getElementById('h'+i);
+            h.style.left = points[i].x + 'px';
+            h.style.top = points[i].y + 'px';
+        }
+    }
+
+    // Handle single instance bindings
+    let dragSetupDone = false;
+    function setupDragSystem() {
+        if(dragSetupDone) return;
+        dragSetupDone = true;
+
+        const cw = document.getElementById('crop-wrapper');
+        let activeHandle = -1;
+
+        const handleStart = (e, i) => { e.preventDefault(); activeHandle = i; };
+        
+        const handleMove = (e) => {
+            if (activeHandle === -1) return;
+            e.preventDefault(); 
+            const pt = e.touches ? e.touches[0] : e;
+            const rect = cw.getBoundingClientRect();
+            
+            let lx = pt.clientX - rect.left;
+            let ly = pt.clientY - rect.top;
+            
+            // Constrain to image bounds safely
+            lx = Math.max(0, Math.min(lx, rect.width));
+            ly = Math.max(0, Math.min(ly, rect.height));
+
+            points[activeHandle] = {x: lx, y: ly};
+            updateHandlesUI();
+        };
+
+        const handleEnd = () => { activeHandle = -1; };
+
+        for(let i=0; i<4; i++){
+            const h = document.getElementById('h'+i);
+            h.addEventListener('mousedown', e => handleStart(e, i));
+            h.addEventListener('touchstart', e => handleStart(e, i), {passive:false});
+        }
+
+        window.addEventListener('mousemove', handleMove);
+        window.addEventListener('touchmove', handleMove, {passive:false});
+        window.addEventListener('mouseup', handleEnd);
+        window.addEventListener('touchend', handleEnd);
+    }
+
+    function warpHighRes() {
+        showLoading("A4 High-Res Extraction...");
+        setTimeout(() => {
+            try {
+                // Map points back to high resolution
+                const hrPoints = points.map(p => [p.x / cropScale, p.y / cropScale]).flat();
+                
+                const srcArray = cv.matFromArray(4, 1, cv.CV_32FC2, hrPoints);
+                const dstArray = cv.matFromArray(4, 1, cv.CV_32FC2, [0,0, A4_W,0, A4_W,A4_H, 0,A4_H]);
+                
+                const M = cv.getPerspectiveTransform(srcArray, dstArray);
+                
+                if(matWarped) matWarped.delete();
+                matWarped = new cv.Mat();
+                cv.warpPerspective(matRotated, matWarped, M, new cv.Size(A4_W, A4_H), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar(255,255,255,255));
+                
+                srcArray.delete(); dstArray.delete(); M.delete();
+
+                // Generate downscaled preview for Filter phase
+                if(matFilterPreview) matFilterPreview.delete();
+                matFilterPreview = new cv.Mat();
+                // 500px width is enough for real-time filter UI
+                const ratio = 500 / A4_W;
+                cv.resize(matWarped, matFilterPreview, new cv.Size(500, Math.floor(A4_H * ratio)), 0, 0, cv.INTER_AREA);
+
+                showStep('step-filter');
+                liveFilterUpdate();
+            } catch (e) {
+                alert("Align Error: " + e.message);
+            }
+            hideLoading();
+        }, 50);
+    }
+
+    // --- PHASE 3: ADAPTIVE FILTER (INK SAVER) ---
+    function liveFilterUpdate() {
+        const valB = parseInt(document.getElementById('slide-b').value); // Divisor (10-100)
+        const valC = parseInt(document.getElementById('slide-c').value); // Filter constant (1-40)
+
+        document.getElementById('val-b').innerText = valB;
+        document.getElementById('val-c').innerText = valC;
+
+        if (filterTimeout) clearTimeout(filterTimeout);
+        
+        filterTimeout = setTimeout(() => {
+            // Calculate block size specifically relative to preview width (500)
+            let bsPreview = Math.floor(matFilterPreview.cols / valB);
+            if(bsPreview % 2 === 0) bsPreview++;
+            if(bsPreview < 3) bsPreview = 3;
+
+            const gray = new cv.Mat();
+            const dst = new cv.Mat();
+            
+            cv.cvtColor(matFilterPreview, gray, cv.COLOR_RGBA2GRAY);
+            cv.adaptiveThreshold(gray, dst, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, bsPreview, valC);
+            
+            cv.imshow('filter-canvas', dst);
+            gray.delete(); dst.delete();
+            
+            // Adjust canvas css for display
+            const ws = document.getElementById('filter-ws');
+            const pad = 40;
+            const scale = Math.min((ws.clientWidth - pad) / 500, (ws.clientHeight - pad) / (500 * 1.414));
+            const c = document.getElementById('filter-canvas');
+            c.style.width = (500 * scale) + 'px';
+            c.style.height = (500 * 1.414 * scale) + 'px';
+
+        }, 100); // 100ms debounce
+    }
+
+    function acceptFilterHighRes() {
+        showLoading("Applying Filter to 8 Megapixels...");
+        setTimeout(() => {
+            const valB = parseInt(document.getElementById('slide-b').value);
+            const valC = parseInt(document.getElementById('slide-c').value);
+
+            // Calculate block size for FULL RES (2480 width)
+            let bsFinal = Math.floor(A4_W / valB);
+            if(bsFinal % 2 === 0) bsFinal++;
+            if(bsFinal < 3) bsFinal = 3;
+
+            const gray = new cv.Mat();
+            const dst = new cv.Mat();
+            cv.cvtColor(matWarped, gray, cv.COLOR_RGBA2GRAY);
+            cv.adaptiveThreshold(gray, dst, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, bsFinal, valC);
+
+            const outCanvas = document.createElement('canvas');
+            cv.imshow(outCanvas, dst);
+            filteredHighResDataUrl = outCanvas.toDataURL('image/jpeg', 0.98);
+
+            gray.delete(); dst.delete();
+            
+            showStep('step-edit');
+            initFabricSystem();
+            hideLoading();
+        }, 50);
+    }
+
+    // --- PHASE 4: EDITOR & PDF ---
+    function initFabricSystem() {
+        const ws = document.getElementById('edit-ws');
+        
+        if (fabricApp) fabricApp.dispose();
+
+        fabricApp = new fabric.Canvas('fabric-canvas');
+        
+        // 1. Set the BACKING layer to EXACT high-res numbers
+        fabricApp.setDimensions({width: A4_W, height: A4_H}, {backstoreOnly: true});
+        
+        // 2. Set the CSS display layer to match screen scale
+        const scale = Math.min((ws.clientWidth) / A4_W, (ws.clientHeight) / A4_H);
+        fabricApp.setDimensions({width: A4_W * scale, height: A4_H * scale}, {cssOnly: true});
+
+        fabric.Image.fromURL(filteredHighResDataUrl, (img) => {
+            img.set({selectable: false, evented: false});
+            img.scaleToWidth(A4_W);
+            fabricApp.setBackgroundImage(img, fabricApp.renderAll.bind(fabricApp));
+        });
+
+        // Initialize drawing properties based on 2480px width
+        fabricApp.freeDrawingBrush = new fabric.PencilBrush(fabricApp);
+        
+        setTool('pen');
+    }
+
+    function setTool(t) {
+        document.querySelectorAll('.tool-btn').forEach(btn => btn.classList.remove('active-tool'));
+        document.getElementById('tool-'+t).classList.add('active-tool');
+
+        if(t === 'pen') {
+            fabricApp.isDrawingMode = true;
+            fabricApp.freeDrawingBrush.color = '#000000';
+            fabricApp.freeDrawingBrush.width = 12; // Adjusted for high-res
+        } else if (t === 'eraser') {
+            fabricApp.isDrawingMode = true;
+            fabricApp.freeDrawingBrush.color = '#FFFFFF';
+            fabricApp.freeDrawingBrush.width = 80;
+        } else if (t === 'text') {
+            fabricApp.isDrawingMode = false;
+            const text = new fabric.IText('Enter text', {
+                left: A4_W/2 - 300, top: A4_H/2, fontSize: 80, fontFamily: 'Arial', fill: '#000000'
+            });
+            fabricApp.add(text);
+            fabricApp.setActiveObject(text);
+        }
+    }
+
+    // --- UKR+ENG OCR ---
+    async function runOCR() {
+        showLoading("AI Vision (UKR+ENG)...");
+        try {
+            const w = await Tesseract.createWorker('ukr+eng');
+            const ret = await w.recognize(filteredHighResDataUrl);
+            document.getElementById('ocr-textarea').value = ret.data.text;
+            document.getElementById('ocr-modal').style.display = 'flex';
+            await w.terminate();
+        } catch(e) {
+            alert("OCR Failed: " + e.message);
+        }
+        hideLoading();
+    }
+
+    function copyOcrText() {
+        const area = document.getElementById('ocr-textarea');
+        navigator.clipboard.writeText(area.value);
+        alert("Copied successfully!");
+    }
+
+    // --- PDF EXPORT ---
+    function exportFinalPDF() {
+        showLoading("Rendering Final PDF...");
+        setTimeout(() => {
+            try {
+                // toDataURL will utilize the 2480x3508 backing store
+                const dataUrl = fabricApp.toDataURL({format: 'jpeg', quality: 0.95});
+                
+                const pdf = new jspdf.jsPDF('p', 'mm', 'a4');
+                pdf.addImage(dataUrl, 'JPEG', 0, 0, 210, 297);
+                pdf.save('SmartScanner_Final.pdf');
+            } catch(e) {
+                alert("PDF Gen Error: " + e.message);
+            }
+            hideLoading();
+        }, 500);
+    }
+</script>
+
+</body>
+</html>

@@ -1,0 +1,6 @@
+{
+  "name": "Smart Exam Scanner & Editor",
+  "description": "Professional tool for digitizing exams: perspective correction, background cleaning, stylus-ready editing, and OCR.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["Image Processing", "OCR", "PDF Export"]
+}

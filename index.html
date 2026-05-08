@@ -357,15 +357,20 @@
         showLoading("Generating Smart Crop...");
         setTimeout(() => {
             try {
+                // Must show step FIRST, so that .workspace gets a valid clientWidth/clientHeight
+                showStep('step-crop');
+
                 const ws = document.getElementById('crop-ws');
                 const cw = document.getElementById('crop-wrapper');
                 const c = document.getElementById('crop-canvas');
                 
                 const pad = 80; // Space for handles
-                cropScale = Math.min((ws.clientWidth - pad) / matRotated.cols, (ws.clientHeight - pad) / matRotated.rows);
+                const safeCw = Math.max(10, ws.clientWidth - pad);
+                const safeCh = Math.max(10, ws.clientHeight - pad);
+                cropScale = Math.min(safeCw / matRotated.cols, safeCh / matRotated.rows);
                 
-                const w = matRotated.cols * cropScale;
-                const h = matRotated.rows * cropScale;
+                const w = Math.max(1, matRotated.cols * cropScale);
+                const h = Math.max(1, matRotated.rows * cropScale);
                 
                 cw.style.width = w + 'px';
                 cw.style.height = h + 'px';
@@ -374,6 +379,7 @@
                 cv.resize(matRotated, dst, new cv.Size(Math.floor(w), Math.floor(h)), 0, 0, cv.INTER_AREA);
                 cv.imshow('crop-canvas', dst);
                 dst.delete();
+
 
                 // Set 4 handles strictly at 4 corners
                 points = [
@@ -386,8 +392,8 @@
                 updateHandlesUI();
                 setupDragSystem();
                 
-                showStep('step-crop');
             } catch (err) {
+                showStep('step-rotate'); // Revert if fails
                 console.error(err);
                 alert("Error during crop initialization: " + err.message);
             } finally {
